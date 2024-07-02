@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Video Conference Room</title>
+</head>
+<body>
+  <video id="localVideo" autoplay muted></video>
+  <video id="remoteVideo" autoplay></video>
+
+  <script>
+    let localStream;
+    let peerConnection;
+    const configuration = { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] };
+    const ws = new WebSocket('wss://localhost:8080');
+    let sid;
+    let remoteSid;
+
+    ws.onmessage = (message) => {
+      const data = JSON.parse(message.data);
+      switch (data.type) {
+        case 'welcome':
+          sid = data.sid;
+          console.log(`Your session ID: ${sid}`);
+          if (location.hash !== '#caller') {
+            ws.send(JSON.stringify({ type: 'register', sid: sid }));
+          }
+          break;
+        case 'offer':
+          handleOffer(data);
+          break;
+        case 'answer':
+          handleAnswer(data);
+          break;
+        case 'candidate':
+          handleCandidate(data);
+          break;
+      }
+    };
+
+    async function start() {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      peerConnection = new RTCPeerConnection(configuration);
+      peerConnection.addStream(localStream);
+
+      peerConnection.onaddstream = (event) => {
+        document.getElementById('remoteVideo').srcObject = event.stream;
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({
+            type: 'candidate',
+            candidate: event.candidate,
+            target: remoteSid
+          }));
+        }
+      };
+
+      if (location.hash === '#caller') {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        remoteSid = prompt('Enter the remote client ID:');
+        ws.send(JSON.stringify({
+          type: 'offer',
+          offer: offer,
+          target: remoteSid
+        }));
+      }
+    }
+
+    async function handleOffer(data) {
+      remoteSid = data.sid;
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      ws.send(JSON.stringify({
+        type: 'answer',
+        answer: answer,
+        target: remoteSid
+      }));
+    }
+
+    async function handleAnswer(data) {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+    }
+
+    function handleCandidate(data) {
+      peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+    }
+
+    start();
+  </script>
+</body>
+</html>
